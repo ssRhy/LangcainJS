@@ -14,67 +14,148 @@ export default function AgentWorkspace() {
   const [socketReady, setSocketReady] = useState(false);
   const requestIdRef = useRef(0);
   const pendingRequestsRef = useRef({});
-  const pollingRef = useRef(null);
+  const webSocketRef = useRef(null);
   const [canvasReady, setCanvasReady] = useState(false);
 
-  // 初始化API通信
+  // 初始化WebSocket连接
   useEffect(() => {
-    // 检查API是否准备好
-    fetch("/api/ws")
-      .then((res) => res.text())
-      .then(() => {
-        console.log("API连接已建立");
-        setSocketReady(true);
+    let wsInstance = null;
+    let retryCount = 0;
+    let retryTimeout = null;
+    const MAX_RETRIES = 5;
 
-        // 开始轮询消息
-        startPolling();
-      })
-      .catch((error) => {
-        console.error("API连接失败:", error);
+    // 创建WebSocket连接函数
+    const connectWebSocket = (url) => {
+      console.log(
+        `尝试连接WebSocket: ${url} (重试: ${retryCount}/${MAX_RETRIES})`
+      );
+
+      // 确保URL包含/ws路径
+      let wsUrl = url;
+      if (!wsUrl.endsWith("/ws")) {
+        wsUrl = wsUrl.endsWith("/") ? `${wsUrl}ws` : `${wsUrl}/ws`;
+      }
+
+      const socket = new WebSocket(wsUrl);
+      webSocketRef.current = socket;
+
+      // 添加全局引用供Agent使用
+      if (typeof window !== "undefined") {
+        window._threeJsAgentWebSocket = socket;
+      }
+
+      socket.onopen = () => {
+        console.log("WebSocket连接已建立");
+        setSocketReady(true);
+        retryCount = 0; // 重置重试计数
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          console.log("收到WebSocket消息:", message.type);
+          handleMessage(message);
+        } catch (error) {
+          console.error("解析WebSocket消息出错:", error);
+        }
+      };
+
+      socket.onclose = (event) => {
+        console.log(
+          `WebSocket连接已关闭 (code: ${event.code}, reason: ${event.reason})`
+        );
+        setSocketReady(false);
+        retryConnection();
+      };
+
+      socket.onerror = (error) => {
+        console.error("WebSocket错误:", error);
+        setSocketReady(false);
+
+        if (retryCount === 0) {
+          addToConversation({
+            role: "system",
+            content: "WebSocket连接出错，正在尝试重新连接...",
+            type: "error",
+          });
+        }
+      };
+
+      return socket;
+    };
+
+    // 重试连接函数
+    const retryConnection = () => {
+      if (retryCount < MAX_RETRIES) {
+        retryCount++;
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 10000); // 指数退避策略，最大10秒
+
+        console.log(`将在 ${delay}ms 后重试WebSocket连接...`);
+        clearTimeout(retryTimeout);
+
+        retryTimeout = setTimeout(() => {
+          if (wsInstance) {
+            try {
+              wsInstance.close();
+            } catch (e) {
+              // 忽略关闭错误
+            }
+          }
+          wsInstance = connectWebSocket(wsUrl);
+        }, delay);
+      } else {
+        console.error(`WebSocket连接失败，已达到最大重试次数 (${MAX_RETRIES})`);
         addToConversation({
           role: "system",
-          content: "API连接失败，请刷新页面重试",
+          content: "WebSocket连接失败，请刷新页面重试或检查服务器是否运行",
           type: "error",
+        });
+      }
+    };
+
+    // 首先获取WebSocket服务地址
+    let wsUrl = "";
+    fetch("/api/ws")
+      .then((res) => res.json())
+      .then((data) => {
+        console.log("WebSocket服务信息:", data);
+        wsUrl = data.websocket_url;
+        wsInstance = connectWebSocket(wsUrl);
+      })
+      .catch((error) => {
+        console.error("获取WebSocket服务信息失败:", error);
+
+        // 使用默认WebSocket地址
+        console.log("使用默认WebSocket地址");
+        wsUrl = `ws://${window.location.hostname}:3001/ws`;
+        wsInstance = connectWebSocket(wsUrl);
+
+        addToConversation({
+          role: "system",
+          content: "无法获取WebSocket服务信息，尝试使用默认连接",
+          type: "warning",
         });
       });
 
     return () => {
-      // 清理轮询
-      if (pollingRef.current) {
-        clearTimeout(pollingRef.current);
+      // 清理函数
+      clearTimeout(retryTimeout);
+
+      // 关闭WebSocket连接
+      if (wsInstance) {
+        try {
+          wsInstance.close();
+        } catch (e) {
+          // 忽略关闭错误
+        }
+      }
+
+      webSocketRef.current = null;
+      if (typeof window !== "undefined") {
+        window._threeJsAgentWebSocket = null;
       }
     };
   }, []);
-
-  // 轮询API获取消息
-  function startPolling() {
-    const poll = () => {
-      if (document.visibilityState === "visible") {
-        // 只在页面可见时轮询
-        fetch("/api/messages")
-          .then((res) => res.json())
-          .catch(() => ({ messages: [] }))
-          .then((data) => {
-            if (data.messages && data.messages.length > 0) {
-              // 处理消息
-              data.messages.forEach((message) => {
-                handleMessage(message);
-              });
-            }
-          })
-          .finally(() => {
-            // 继续轮询
-            pollingRef.current = setTimeout(poll, 1000);
-          });
-      } else {
-        // 页面不可见时减慢轮询频率
-        pollingRef.current = setTimeout(poll, 5000);
-      }
-    };
-
-    // 开始第一次轮询
-    poll();
-  }
 
   // 处理收到的消息
   function handleMessage(message) {
@@ -145,25 +226,33 @@ export default function AgentWorkspace() {
     }
   }
 
-  // 安全地发送API请求
-  async function sendApiRequest(endpoint, data) {
-    try {
-      const response = await fetch(`/api/${endpoint}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(data),
+  // 通过WebSocket发送消息
+  function sendWebSocketMessage(message) {
+    if (
+      !webSocketRef.current ||
+      webSocketRef.current.readyState !== WebSocket.OPEN
+    ) {
+      console.error("WebSocket未连接");
+      addToConversation({
+        role: "system",
+        content: "WebSocket未连接，无法发送消息",
+        type: "error",
       });
+      return false;
+    }
 
-      if (!response.ok) {
-        throw new Error(`API请求失败: ${response.status}`);
-      }
-
-      return await response.json();
+    try {
+      console.log("发送WebSocket消息:", message);
+      webSocketRef.current.send(JSON.stringify(message));
+      return true;
     } catch (error) {
-      console.error(`发送到${endpoint}的请求失败:`, error);
-      return { success: false, error: error.message };
+      console.error("发送WebSocket消息出错:", error);
+      addToConversation({
+        role: "system",
+        content: `发送消息失败: ${error.message}`,
+        type: "error",
+      });
+      return false;
     }
   }
 
@@ -182,19 +271,13 @@ export default function AgentWorkspace() {
       content: userInput,
     });
 
-    try {
-      // 发送用户输入到服务器
-      await sendApiRequest("chat", {
-        type: "user_input",
-        content: userInput,
-      });
-    } catch (error) {
-      console.error("发送消息错误:", error);
-      addToConversation({
-        role: "system",
-        content: "发送消息失败，请检查网络连接",
-        type: "error",
-      });
+    // 通过WebSocket发送用户输入
+    const success = sendWebSocketMessage({
+      type: "user_input",
+      content: userInput,
+    });
+
+    if (!success) {
       setIsAgentWorking(false);
     }
 
@@ -205,8 +288,8 @@ export default function AgentWorkspace() {
   async function executeCode(code, requestId) {
     if (!threeCanvasRef.current) {
       console.error("Three.js Canvas组件未初始化");
-      await sendApiRequest("toolResponse", {
-        type: "code_execution_result",
+      sendWebSocketMessage({
+        type: "tool_response",
         requestId,
         result: {
           success: false,
@@ -219,9 +302,9 @@ export default function AgentWorkspace() {
     try {
       const result = await threeCanvasRef.current.executeCode(code);
 
-      // 返回执行结果给服务器
-      await sendApiRequest("toolResponse", {
-        type: "code_execution_result",
+      // 返回执行结果
+      sendWebSocketMessage({
+        type: "tool_response",
         requestId,
         result,
       });
@@ -235,8 +318,8 @@ export default function AgentWorkspace() {
     } catch (error) {
       console.error("执行代码错误:", error);
 
-      await sendApiRequest("toolResponse", {
-        type: "code_execution_result",
+      sendWebSocketMessage({
+        type: "tool_response",
         requestId,
         result: {
           success: false,
@@ -250,8 +333,8 @@ export default function AgentWorkspace() {
   async function captureScreenshot(quality, view, requestId) {
     if (!threeCanvasRef.current) {
       console.error("Three.js Canvas组件未初始化");
-      await sendApiRequest("toolResponse", {
-        type: "screenshot_result",
+      sendWebSocketMessage({
+        type: "tool_response",
         requestId,
         result: {
           success: false,
@@ -267,8 +350,8 @@ export default function AgentWorkspace() {
         view
       );
 
-      await sendApiRequest("toolResponse", {
-        type: "screenshot_result",
+      sendWebSocketMessage({
+        type: "tool_response",
         requestId,
         result,
       });
@@ -284,8 +367,8 @@ export default function AgentWorkspace() {
     } catch (error) {
       console.error("捕获截图错误:", error);
 
-      await sendApiRequest("toolResponse", {
-        type: "screenshot_result",
+      sendWebSocketMessage({
+        type: "tool_response",
         requestId,
         result: {
           success: false,
@@ -299,8 +382,8 @@ export default function AgentWorkspace() {
   async function analyzeScene(detail, focus, requestId) {
     if (!threeCanvasRef.current) {
       console.error("Three.js Canvas组件未初始化");
-      await sendApiRequest("toolResponse", {
-        type: "scene_analysis_result",
+      sendWebSocketMessage({
+        type: "tool_response",
         requestId,
         result: {
           success: false,
@@ -313,8 +396,8 @@ export default function AgentWorkspace() {
     try {
       const result = await threeCanvasRef.current.analyzeScene(detail, focus);
 
-      await sendApiRequest("toolResponse", {
-        type: "scene_analysis_result",
+      sendWebSocketMessage({
+        type: "tool_response",
         requestId,
         result,
       });
@@ -329,8 +412,8 @@ export default function AgentWorkspace() {
     } catch (error) {
       console.error("分析场景错误:", error);
 
-      await sendApiRequest("toolResponse", {
-        type: "scene_analysis_result",
+      sendWebSocketMessage({
+        type: "tool_response",
         requestId,
         result: {
           success: false,

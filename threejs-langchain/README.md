@@ -1,3 +1,82 @@
+# ThreeJS Langchain Agent
+
+基于 WebSocket 的 Three.js 场景生成代理，通过 WebSocket 实现前后端通信。
+
+## 项目架构
+
+- **前端**: Next.js + React + Three.js
+- **后端**: Node.js WebSocket 服务器 + Langchain Agent
+- **AI 模型**: Azure OpenAI (GPT-4o)
+
+项目使用 WebSocket 进行实时通信，将 AI 代理与 Three.js 场景渲染无缝集成。
+
+## 安装依赖
+
+```bash
+npm install
+# 或
+yarn
+# 或
+pnpm install
+```
+
+## 环境变量设置
+
+创建`.env`文件，包含以下内容：
+
+```bash
+# Azure OpenAI API设置
+AZURE_OPENAI_API_KEY=your_api_key
+AZURE_OPENAI_ENDPOINT=your_endpoint
+AZURE_OPENAI_API_INSTANCE_NAME=your_instance
+AZURE_OPENAI_API_DEPLOYMENT_NAME=your_deployment
+AZURE_OPENAI_API_VERSION=2024-02-15-preview
+AZURE_OPENAI_API_TYPE=azure
+
+# 应用设置
+NEXT_PUBLIC_API_BASE_URL=http://localhost:3000
+NEXT_PUBLIC_WS_HOST=localhost
+WS_PORT=3001
+```
+
+## 启动应用
+
+使用单个命令启动完整应用（WebSocket 服务器 + Next.js）:
+
+```bash
+npm run start:all
+# 或
+yarn start:all
+# 或
+pnpm start:all
+```
+
+应用将在以下地址启动:
+
+- Web 界面: http://localhost:3000
+- WebSocket 服务: ws://localhost:3001/ws
+
+## 各组件单独启动
+
+WebSocket 服务器:
+
+```bash
+npm run websocket
+```
+
+Next.js 开发服务器:
+
+```bash
+npm run dev
+```
+
+## 项目功能
+
+- 自然语言描述生成 Three.js 3D 场景
+- 实时代码执行和场景渲染
+- 场景分析和截图功能
+- 保持会话上下文的对话
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started

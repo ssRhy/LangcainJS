@@ -1,0 +1,16 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+make threejs a tool to langchain agent. the agent can write threejs code and cmopile on threejs renderer and get screenshot back for agent to analyze and decide what to do next. the whole process happend in front-end and non-headless. and user can observe the iteration process. best case make the project a next js stuff.and more interested in the tooling and agent stuff. give me full enginerrings here
+
+1.需要调用agent的真实数据，动态实时更新，不要mock数据
+2.不要随意增加功能和测试脚本
+3.保持数据接口和函数名相同
+4.使用langchainjs0.3版本
+5.不要随意改api接口和函数，我要严格规定的langchainjs格式，阅读langchainjs0.3 api的官方文档
+6.同时与Azure Open AI兼容
+7.使用websocket实现前后端通信和传输而不是模拟等待
+8.Node.js服务器使用的是CommonJS(require)。需要统一导入导出语法。

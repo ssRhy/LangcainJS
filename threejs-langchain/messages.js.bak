@@ -9,7 +9,7 @@ function cleanupOldMessages() {
   messages = messages.filter((msg) => now - msg.timestamp < 30000);
 }
 
-export async function GET(request) {
+export async function GET() {
   cleanupOldMessages();
 
   // 返回最新消息并清空队列
@@ -49,8 +49,3 @@ export async function POST(request) {
 }
 
 export const dynamic = "force-dynamic";
-
-// 同时支持CommonJS导出
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { messages, addMessageToQueue };
-}

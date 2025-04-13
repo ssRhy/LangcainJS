@@ -1,0 +1,80 @@
+import { NextResponse } from "next/server";
+import { addMessageToQueue } from "../messages/route.js";
+import { createThreeAgent } from "@/lib/agents/threeAgent";
+
+export async function POST(request) {
+  try {
+    const data = await request.json();
+
+    if (data.type === "user_input") {
+      // 生成请求ID
+      const requestId = Date.now().toString();
+
+      // 添加思考消息
+      addMessageToQueue({
+        type: "agent_thinking",
+        content: "正在思考如何创建3D场景...",
+        requestId,
+      });
+
+      // 异步执行agent处理
+      (async () => {
+        try {
+          console.log("创建Three.js Agent开始处理用户输入...");
+          // 创建Agent
+          const agent = await createThreeAgent();
+          console.log("Agent创建成功，开始处理请求...");
+
+          // 执行Agent
+          const result = await agent.invoke({
+            input: data.content,
+            chat_history: [],
+          });
+
+          console.log("Agent处理完成，结果:", result.output);
+
+          // 添加Agent响应
+          addMessageToQueue({
+            type: "agent_message",
+            content: result.output,
+            requestId,
+          });
+
+          // 完成状态
+          addMessageToQueue({
+            type: "agent_complete",
+            requestId,
+          });
+        } catch (error) {
+          console.error("Agent执行错误:", error);
+          // 添加错误消息
+          addMessageToQueue({
+            type: "agent_message",
+            content: `处理请求时出错: ${error.message}`,
+            requestId,
+          });
+
+          addMessageToQueue({
+            type: "agent_complete",
+            requestId,
+          });
+        }
+      })();
+
+      return NextResponse.json({ success: true });
+    }
+
+    return NextResponse.json(
+      { success: false, message: "未知请求类型" },
+      { status: 400 }
+    );
+  } catch (error) {
+    console.error("处理chat请求错误:", error);
+    return NextResponse.json(
+      { success: false, error: error.message },
+      { status: 500 }
+    );
+  }
+}
+
+export const dynamic = "force-dynamic";
