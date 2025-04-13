@@ -7,7 +7,7 @@ const {
 const { DynamicStructuredTool } = require("@langchain/core/tools");
 const { z } = require("zod");
 const { BufferMemory } = require("langchain/memory");
-const { Client } = require("langsmith");
+const Client = require("langsmith").Client;
 const dotenv = require("dotenv");
 const path = require("path");
 const fs = require("fs");

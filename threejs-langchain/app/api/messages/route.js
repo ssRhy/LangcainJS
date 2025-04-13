@@ -48,9 +48,6 @@ export async function POST(request) {
   }
 }
 
-export const dynamic = "force-dynamic";
-
-// 同时支持CommonJS导出
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { messages, addMessageToQueue };
 }

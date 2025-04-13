@@ -6,6 +6,16 @@ const dotenv = require("dotenv");
 // 加载环境变量
 dotenv.config();
 
+// 在其他代码前先输出环境变量状态
+console.log(
+  "环境变量检查: AZURE_OPENAI_API_KEY:",
+  process.env.AZURE_OPENAI_API_KEY ? "已设置" : "未设置"
+);
+console.log(
+  "环境变量检查: AZURE_OPENAI_ENDPOINT:",
+  process.env.AZURE_OPENAI_ENDPOINT ? "已设置" : "未设置"
+);
+
 // 加载WebSocket服务
 console.log("开始初始化服务器...");
 console.log("尝试导入WebSocket模块...");
