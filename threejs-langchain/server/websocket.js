@@ -78,26 +78,65 @@ async function loadFunctionality() {
 
   // Agent处理
   try {
-    console.log("尝试加载threeAgent模块...");
-    const agentPath = path.resolve(__dirname, "../lib/agents/threeAgent.js");
+    console.log("尝试加载debugThreeAgent模块...");
+    const debugAgentPath = path.resolve(__dirname, "../lib/agents/debugThreeAgent.js");
+    const regularAgentPath = path.resolve(__dirname, "../lib/agents/threeAgent.js");
 
-    if (fs.existsSync(agentPath)) {
+    // 首先尝试加载调试版本的Agent
+    if (fs.existsSync(debugAgentPath)) {
       try {
-        // 使用CommonJS方式加载
-        const agentModule = require(agentPath);
-        createThreeAgent = agentModule.createThreeAgent;
-        formatMessage = agentModule.formatMessage || ((msg) => msg);
-        console.log("成功加载threeAgent模块");
+        // 使用CommonJS方式加载调试版本
+        const debugAgentModule = require(debugAgentPath);
+        createThreeAgent = debugAgentModule.createDebugThreeAgent;
+        console.log("✅ 成功加载debugThreeAgent模块 - 使用带消息调试功能的Agent");
+        
+        // 加载常规模块以获取formatMessage函数
+        try {
+          const regularAgentModule = require(regularAgentPath);
+          formatMessage = regularAgentModule.formatMessage || ((msg) => msg);
+        } catch (err) {
+          formatMessage = (msg) => msg;
+        }
       } catch (err) {
-        console.warn(`无法直接加载threeAgent模块: ${err.message}`);
-        // 创建模拟Agent
+        console.warn(`⚠️ 无法加载debugThreeAgent模块: ${err.message}`);
+        // 尝试加载常规Agent
+        if (fs.existsSync(regularAgentPath)) {
+          try {
+            const agentModule = require(regularAgentPath);
+            createThreeAgent = agentModule.createThreeAgent;
+            formatMessage = agentModule.formatMessage || ((msg) => msg);
+            console.log("✅ 成功加载常规threeAgent模块");
+          } catch (err) {
+            console.warn(`⚠️ 无法加载常规threeAgent模块: ${err.message}`);
+            createThreeAgent = createMockAgent;
+            formatMessage = (msg) => msg;
+          }
+        } else {
+          console.warn(`⚠️ Agent模块文件不存在: ${regularAgentPath}`);
+          createThreeAgent = createMockAgent;
+          formatMessage = (msg) => msg;
+        }
+      }
+    } else {
+      // 如果调试版本不存在，尝试加载常规版本
+      console.warn(`⚠️ 调试Agent模块文件不存在: ${debugAgentPath}`);
+      
+      if (fs.existsSync(regularAgentPath)) {
+        try {
+          const agentModule = require(regularAgentPath);
+          createThreeAgent = agentModule.createThreeAgent;
+          formatMessage = agentModule.formatMessage || ((msg) => msg);
+          console.log("✅ 成功加载常规threeAgent模块");
+        } catch (err) {
+          console.warn(`⚠️ 无法加载常规threeAgent模块: ${err.message}`);
+          createThreeAgent = createMockAgent;
+          formatMessage = (msg) => msg;
+        }
+      } else {
+        console.warn(`⚠️ Agent模块文件不存在: ${regularAgentPath}`);
         createThreeAgent = createMockAgent;
         formatMessage = (msg) => msg;
       }
-    } else {
-      console.warn(`Agent模块文件不存在: ${agentPath}`);
-      createThreeAgent = createMockAgent;
-      formatMessage = (msg) => msg;
     }
   } catch (error) {
     console.error("加载Agent失败:", error);

@@ -88,6 +88,15 @@ function formatMessage(msg) {
 
     // 对象类型处理
     if (typeof msg === "object") {
+      // 特殊处理agent_scratchpad字段，这通常是出错的源头
+      if (msg.agent_scratchpad && typeof msg.agent_scratchpad === "object") {
+        console.log("检测到agent_scratchpad对象，移除或转换为字符串");
+        if (typeof msg.content === "object") {
+          msg.content = JSON.stringify(msg.content);
+        }
+        delete msg.agent_scratchpad;
+      }
+
       // 确保有效的role
       const role = msg.role && typeof msg.role === "string" ? msg.role : "user";
 
@@ -130,11 +139,31 @@ function formatMessage(msg) {
           content = JSON.stringify(msg.content);
         }
       } else if (typeof msg.content === "object") {
-        // 对象类型：转为字符串避免API错误
-        content = JSON.stringify(msg.content);
+        // 对象类型处理
+        console.warn("消息content是对象类型，进行特殊处理");
+        
+        // 检查是否为OpenAI支持的特殊对象格式
+        if (msg.content.type && [
+            "text",
+            "image_url",
+            "function_call"
+          ].includes(msg.content.type)) {
+          // 如果是单个符合格式的对象，将其转换为数组格式
+          content = [msg.content];
+          console.log("已将单个对象转换为数组格式");
+        } else {
+          // 其他对象类型转为字符串
+          content = JSON.stringify(msg.content);
+        }
       } else {
         // 其他类型转为字符串
         content = String(msg.content);
+      }
+
+      // 最终检查确保content是字符串或合法数组
+      if (typeof content !== "string" && !Array.isArray(content)) {
+        console.warn("警告：content格式仍不正确，强制转为字符串");
+        content = JSON.stringify(content);
       }
 
       // 返回格式化后的消息
@@ -214,7 +243,18 @@ function sanitizeMessagesForAPI(messages) {
       console.warn(
         `sanitizeMessagesForAPI: 消息[${idx}]的content是对象，转为字符串`
       );
-      content = JSON.stringify(msg.content);
+      // 检查是否为OpenAI支持的特殊对象格式
+      if (msg.content.type && [
+          "text",
+          "image_url",
+          "function_call"
+        ].includes(msg.content.type)) {
+        // 如果是单个符合格式的对象，将其转换为数组格式
+        content = [msg.content];
+      } else {
+        // 其他对象类型转为字符串
+        content = JSON.stringify(msg.content);
+      }
     } else {
       // 其他类型转为字符串
       content = String(msg.content);
@@ -235,13 +275,49 @@ function sanitizeMessagesForAPI(messages) {
   return sanitized;
 }
 
-// 修改createAzureLLM函数，增强消息验证
+// 修改createAzureLLM函数，简化处理消息格式
 const createAzureLLM = (config = {}) => {
   try {
     // 尝试创建Azure版本
     console.log("尝试创建Azure OpenAI模型...");
+    
+    // 定义消息格式化函数
+    const formatMessages = (messages) => {
+      // 如果不是数组，转换为数组
+      if (!Array.isArray(messages)) {
+        console.warn('警告: messages不是数组，转换为数组');
+        return [{ role: 'user', content: String(messages || '') }];
+      }
+      
+      // 对每个消息进行格式化
+      return messages.map((msg, idx) => {
+        // 如果不是对象，转换为对象
+        if (!msg || typeof msg !== "object") {
+          return { role: "user", content: String(msg || "") };
+        }
+        
+        // 确保 role 合法
+        const role = msg.role || "user";
+        let content = msg.content;
+        
+        // 统一把 null/undefined 转为空字符串
+        if (content == null) {
+          content = "";
+        }
+        // 如果 content 不是字符串，强制转为字符串
+        else if (typeof content !== "string") {
+          try {
+            content = JSON.stringify(content);
+          } catch (err) {
+            content = "";
+          }
+        }
+        
+        return { role, content };
+      });
+    };
 
-    // 创建原始模型
+    // 创建原始模型，并添加回调函数
     const azureOpenAI = new AzureChatOpenAI({
       model: "gpt-4o",
       temperature: 0,
@@ -256,119 +332,29 @@ const createAzureLLM = (config = {}) => {
         "2024-02-15-preview",
       azureOpenAIApiEndpoint:
         config.azureOpenAIApiEndpoint || process.env.AZURE_OPENAI_ENDPOINT,
+      callbacks: [{
+        handleLLMStart: async (llm, messages) => {
+          console.log("MessageValidator: 验证消息格式");
+          // 格式化消息并返回
+          return { messages: formatMessages(messages) };
+        }
+      }]
     });
-
-    // 深度包装API调用，确保消息格式正确
-    const originalSend = azureOpenAI.completionWithChatInputs;
-    if (originalSend) {
-      azureOpenAI.completionWithChatInputs = async function (inputs, options) {
-        // 尝试自动修复可能的格式问题
-        if (inputs && inputs.messages) {
-          try {
-            console.log("原始消息数量:", inputs.messages.length);
-
-            // 确保所有消息内容都是字符串或数组，而不是对象
-            inputs.messages = inputs.messages.map((msg, index) => {
-              if (!msg) return { role: "user", content: "" };
-
-              const role = msg.role || "user";
-              let content = msg.content;
-
-              // 特殊处理content字段
-              if (content === null || content === undefined) {
-                content = "";
-              } else if (
-                typeof content === "object" &&
-                !Array.isArray(content)
-              ) {
-                // 对象类型需要转为字符串
-                console.log(`消息[${index}]的content是对象，转换为字符串`);
-                content = JSON.stringify(content);
-              }
-
-              return { role, content };
-            });
-
-            // 打印最终发送的消息内容
-            console.log("最终消息格式检查:");
-            inputs.messages.forEach((msg, idx) => {
-              console.log(
-                `消息[${idx}]: role=${
-                  msg.role
-                }, contentType=${typeof msg.content}`
-              );
-            });
-          } catch (e) {
-            console.error("消息预处理最终失败:", e);
-            // 最后的尝试：将所有消息强制为字符串内容
-            inputs.messages = inputs.messages.map((msg) => ({
-              role: msg.role || "user",
-              content: typeof msg.content === "string" ? msg.content : "",
-            }));
-          }
-        }
-
-        // 调用原始函数
-        try {
-          return await originalSend.call(this, inputs, options);
-        } catch (error) {
-          console.error("API调用失败:", error.message);
-          throw error;
-        }
-      };
-    }
-
-    // 包装核心方法以确保消息格式化
-    const originalInvokeMethod = azureOpenAI.invoke;
-    azureOpenAI.invoke = async function (messages, options) {
-      console.log("LLM.invoke被调用，确保消息格式化");
-
-      try {
-        // 确保每个消息都经过格式化
-        const formattedMessages = Array.isArray(messages)
-          ? messages.map((msg) => formatMessage(msg))
-          : formatMessage(messages);
-
-        // 对格式化后的消息应用原方法
-        return await originalInvokeMethod.call(
-          this,
-          formattedMessages,
-          options
-        );
-      } catch (err) {
-        console.error("调用LLM时出错:", err);
-        throw err;
-      }
+    
+    // 包装invoke方法以确保消息格式化
+    const originalInvoke = azureOpenAI.invoke;
+    azureOpenAI.invoke = async function(messages, options) {
+      // 格式化消息
+      const formattedMessages = formatMessages(messages);
+      // 调用原始方法
+      return originalInvoke.call(this, formattedMessages, options);
     };
-
-    // 包装_convertMessageToOpenAICompatible方法
-    if (azureOpenAI._convertMessageToOpenAICompatible) {
-      const originalConvertMethod =
-        azureOpenAI._convertMessageToOpenAICompatible;
-      azureOpenAI._convertMessageToOpenAICompatible = function (message) {
-        const formattedMessage = formatMessage(message);
-        return originalConvertMethod.call(this, formattedMessage);
-      };
-    }
-
-    // 返回包装后的模型
+    
+    console.log('返回带消息格式化功能的LLM实例');
     return azureOpenAI;
   } catch (error) {
     console.warn("创建Azure OpenAI模型失败:", error.message);
-    console.log("尝试回退使用ChatOpenAI模型...");
-
-    // 尝试回退
-    try {
-      const { ChatOpenAI } = require("@langchain/openai");
-      return new ChatOpenAI({
-        modelName: "gpt-3.5-turbo",
-        temperature: 0,
-        openAIApiKey: process.env.OPENAI_API_KEY,
-      });
-    } catch (fallbackError) {
-      console.error("回退ChatOpenAI创建也失败:", fallbackError);
-      throw new Error("无法创建LLM: 请检查API密钥和环境变量配置");
-    }
+    throw error;
   }
 };
 
@@ -438,13 +424,16 @@ const createBasicTools = (sessionId) => [
 1. 不要创建场景(scene)、相机(camera)或渲染器(renderer)，直接使用已存在的变量
 2. 不要包含任何渲染循环代码(requestAnimationFrame或animate函数)
 3. 不使用import/export语句
-4. 直接使用scene.add()将对象添加到场景中
+4. 直接使用scene.add()将对象添加到场景中，确保添加创建的所有对象
 5. 不要使用document.querySelector或任何DOM操作
 6. 代码必须添加至少一个3D对象到场景中
 7. 复杂度：${complexity}
 8. 不要在注释或代码中包含任何Markdown格式
 9. 不要输出代码块标记
 10. 代码必须是纯JavaScript，没有任何包装
+11. 不要创建任何函数，直接使用线性代码
+12. 确保每个创建的3D对象都使用scene.add()添加到场景中
+13. 避免使用类定义或模块语法
 
 优秀的代码示例：
 // 创建一个红色立方体
@@ -461,7 +450,7 @@ const plane = new THREE.Mesh(planeGeometry, planeMaterial);
 plane.rotation.x = -Math.PI / 2;
 scene.add(plane);
 
-只输出纯JavaScript代码，不包含任何HTML标记、代码块标记或其他格式标记。不需要任何解释。`,
+只输出纯JavaScript代码，不包含任何HTML标记、代码块标记或其他格式标记。不需要任何解释。每个对象创建后必须立即调用scene.add()将其添加到场景中。`,
         ],
         ["human", "{input}"],
       ]);
@@ -519,6 +508,49 @@ scene.add(plane);
         if (funcBodyMatch && funcBodyMatch[1]) {
           code = funcBodyMatch[1].trim();
         }
+      }
+
+      // 确保移除所有的import和export语句
+      code = code.replace(/^\s*import\s+.*?;?\s*$/gm, "// 不需要import语句");
+      code = code.replace(/^\s*export\s+.*?;?\s*$/gm, "// 不需要export语句");
+
+      // 检查是否每个创建的对象都有对应的scene.add调用
+      const addObjectPattern = (objName) => {
+        if (
+          code.includes(`const ${objName} =`) ||
+          code.includes(`let ${objName} =`)
+        ) {
+          if (!code.includes(`scene.add(${objName})`)) {
+            return `scene.add(${objName});`;
+          }
+        }
+        return "";
+      };
+
+      // 常见的3D对象变量名
+      const commonObjectNames = [
+        "cube",
+        "sphere",
+        "plane",
+        "cylinder",
+        "torus",
+        "mesh",
+        "group",
+        "object",
+      ];
+
+      // 查找代码中可能创建了但未添加到场景的对象
+      let missingAddCalls = "";
+      commonObjectNames.forEach((name) => {
+        const addCall = addObjectPattern(name);
+        if (addCall) {
+          missingAddCalls += `\n// 自动添加遗漏的对象\n${addCall}`;
+        }
+      });
+
+      // 添加缺失的scene.add调用
+      if (missingAddCalls) {
+        code += missingAddCalls;
       }
 
       // 添加基本的验证 - 确保代码中包含scene.add
@@ -600,8 +632,9 @@ scene.add(defaultCube);`;
   }),
 ];
 
-// 创建对话Agent
+// 创建对话Agent - 超简化版
 const createConversationAgent = (llm, tools) => {
+  // 创建提示模板
   const prompt = ChatPromptTemplate.fromMessages([
     [
       "system",
@@ -621,83 +654,13 @@ execute_threejs_code工具执行代码。如果用户只是闲聊，你可以直
     new MessagesPlaceholder("agent_scratchpad"),
   ]);
 
-  // 创建工具调用代理并确保所有消息都被格式化
-  const agent = createToolCallingAgent({
+  // 创建工具调用代理
+  console.log("创建Tool-Calling Agent");
+  return createToolCallingAgent({
     llm,
     tools,
     prompt,
   });
-
-  // 增强agent以确保工具调用的安全性
-  const originalPlanMethod = agent.plan;
-  agent.plan = async function (steps, inputs) {
-    console.log("增强agent.plan方法...");
-
-    // 在plan之前做一些处理...
-    try {
-      // 确保steps是可迭代的
-      if (steps && !Array.isArray(steps)) {
-        console.warn("步骤不是数组，转换为空数组");
-        steps = [];
-      }
-
-      // 确保inputs是对象
-      if (!inputs || typeof inputs !== "object") {
-        console.warn("输入不是对象，转换为空对象");
-        inputs = {};
-      }
-
-      // 递归处理agent_scratchpad，确保它始终是字符串
-      const processAgentScratchpad = (obj) => {
-        if (obj === null || obj === undefined) return obj;
-
-        if (typeof obj === "object") {
-          // 如果是agent_scratchpad字段，转换为字符串
-          if (obj.agent_scratchpad !== undefined) {
-            console.log("处理顶层agent_scratchpad...");
-            if (typeof obj.agent_scratchpad === "object") {
-              obj.agent_scratchpad = JSON.stringify(obj.agent_scratchpad);
-            }
-          }
-
-          // 递归处理所有字段
-          for (const key in obj) {
-            if (Object.prototype.hasOwnProperty.call(obj, key)) {
-              const value = obj[key];
-              if (value !== null && typeof value === "object") {
-                // 处理嵌套对象
-                if (key === "agent_scratchpad") {
-                  console.log("处理嵌套agent_scratchpad...");
-                  obj[key] =
-                    typeof value === "object" ? JSON.stringify(value) : value;
-                } else {
-                  // 递归处理
-                  processAgentScratchpad(value);
-                }
-              }
-            }
-          }
-        }
-
-        return obj;
-      };
-
-      // 应用递归处理到整个inputs对象
-      inputs = processAgentScratchpad(inputs);
-
-      // 调用原始方法
-      const result = await originalPlanMethod.call(this, steps, inputs);
-      return result;
-    } catch (error) {
-      console.error("agent.plan方法出错:", error);
-      // 如果失败，返回一个安全的默认响应
-      return {
-        text: "思考过程中发生错误，请尝试简化您的请求",
-      };
-    }
-  };
-
-  return agent;
 };
 
 // 创建Three.js Agent - 主函数
@@ -778,96 +741,36 @@ async function createThreeAgent(config = {}) {
       verbose: true,
       tags: ["threejs-agent", "conversation"],
 
-      // 自定义调用方法，确保所有输入消息都被格式化
+      // 超简化的调用方法
       async invoke(input, options = {}) {
-        console.log("AgentExecutor.invoke被调用，格式化输入");
+        console.log("AgentExecutor.invoke被调用");
 
         try {
-          // 防止未定义的输入
+          // 基本输入检查
           input = input || {};
 
-          // 格式化聊天历史 - 特别小心处理这个字段
-          if (input.chat_history) {
-            if (Array.isArray(input.chat_history)) {
-              // 深度格式化每个消息
-              input.chat_history = input.chat_history.map((msg) =>
-                formatMessage(msg)
-              );
-            } else if (typeof input.chat_history === "object") {
-              // 如果不是数组但是对象，则转换为字符串
-              input.chat_history = [
-                {
-                  role: "system",
-                  content: JSON.stringify(input.chat_history),
-                },
-              ];
-            } else if (
-              input.chat_history === null ||
-              input.chat_history === undefined
-            ) {
-              // 确保至少是空数组
-              input.chat_history = [];
-            }
-          } else {
-            // 确保存在聊天历史
+          // 确保聊天历史存在且是数组
+          if (!input.chat_history || !Array.isArray(input.chat_history)) {
             input.chat_history = [];
           }
 
-          // 记录处理后的聊天历史
-          console.log("格式化后的chat_history长度:", input.chat_history.length);
-
-          // 确保input内容是字符串
-          if (input.input && typeof input.input !== "string") {
-            input.input = String(input.input);
+          // 确保input字段存在且是字符串
+          if (input.input === undefined || input.input === null) {
+            input.input = "";
+          } else if (typeof input.input !== "string") {
+            input.input = String(input.input || "");
           }
 
-          // 增强：拦截agent_scratchpad字段
-          const handleAgentScratchpad = (obj) => {
-            if (obj === null || obj === undefined) return;
-
-            for (const key in obj) {
-              if (Object.prototype.hasOwnProperty.call(obj, key)) {
-                const value = obj[key];
-
-                if (key === "agent_scratchpad") {
-                  console.log("在invoke中拦截到agent_scratchpad，转换为字符串");
-                  if (typeof value === "object" && value !== null) {
-                    obj[key] = JSON.stringify(value);
-                  }
-                } else if (typeof value === "object" && value !== null) {
-                  // 递归处理所有嵌套对象
-                  handleAgentScratchpad(value);
-                }
-              }
-            }
-          };
-
-          // 递归检查输入对象中的agent_scratchpad
-          handleAgentScratchpad(input);
-
-          // 安全执行
-          try {
-            return await super.invoke(input, options);
-          } catch (error) {
-            console.error("Agent调用错误:", error.message);
-
-            // 如果是消息格式错误
-            if (error.message.includes("messages")) {
-              console.log("检测到消息格式错误，返回降级输出");
-              return {
-                output: `由于技术原因无法处理您的请求。请尝试以更简单的方式描述您想要的3D场景。`,
-              };
-            }
-
-            // 返回适当的错误信息
-            return {
-              output: `执行出错: ${error.message}`,
-            };
-          }
-        } catch (e) {
-          console.error("Agent.invoke出现未处理异常:", e);
+          console.log(`调用Agent，输入长度: ${input.input.length}`);
+          
+          // 调用原始方法
+          return await super.invoke(input, options);
+        } catch (error) {
+          console.error("Agent调用错误:", error);
+          
+          // 返回错误信息
           return {
-            output: "处理请求时发生意外错误，请重试",
+            output: `执行出错: ${error.message}`,
           };
         }
       },
@@ -938,30 +841,52 @@ async function createThreeAgent(config = {}) {
         return action;
       },
 
-      // 增强：工具执行后处理，确保结果安全转换
+      // 超简化版工具调用方法
       async _callTool(tool, toolInput) {
-        console.log(`安全执行工具: ${tool.name}`);
+        console.log(`执行工具: ${tool.name}`);
         try {
-          // 调用原始工具
-          const result = await super._callTool(tool, toolInput);
-
-          // 安全处理工具返回值
-          let safeResult = result;
-          if (result !== null && typeof result === "object") {
+          // 确保工具输入是合适的格式
+          let input = toolInput;
+          if (typeof toolInput === "object" && toolInput !== null) {
             try {
-              // 尝试将复杂对象转换为字符串
-              safeResult = JSON.stringify(result);
-              console.log(`工具(${tool.name})返回了复杂对象，已转换为字符串`);
-            } catch (err) {
-              console.error("无法将工具结果转换为字符串:", err);
-              safeResult = String(result);
+              input = JSON.stringify(toolInput);
+            } catch (e) {
+              input = String(toolInput);
             }
           }
 
-          return safeResult;
+          // 直接调用工具
+          const result = await tool.invoke(input);
+          
+          // 确保返回结果是字符串
+          if (result === null || result === undefined) {
+            return "";
+          } else if (typeof result === "string") {
+            return result;
+          } else if (typeof result === "object") {
+            // 处理工具消息对象
+            if (result.type === "tool_message" || result.tool_call_id) {
+              if (result.content && typeof result.content !== "string") {
+                result.content = typeof result.content === "object"
+                  ? JSON.stringify(result.content)
+                  : String(result.content || "");
+              }
+              return result;
+            }
+            
+            // 其他对象转为JSON字符串
+            try {
+              return JSON.stringify(result);
+            } catch (err) {
+              return String(result);
+            }
+          }
+          
+          // 其他类型转为字符串
+          return String(result);
         } catch (err) {
-          console.error(`工具(${tool.name})执行错误:`, err);
-          return `执行出错: ${err.message}`;
+          console.error(`工具错误:`, err);
+          return `工具错误: ${err.message}`;
         }
       },
     });
@@ -972,56 +897,6 @@ async function createThreeAgent(config = {}) {
     console.error("创建Agent时发生错误:", error);
     throw new Error(`创建ThreeAgent失败: ${error.message}`);
   }
-}
-
-// 如果当前脚本是直接运行的，则设置交互式模式
-if (require.main === module) {
-  const readline = require("readline");
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  console.log("Three.js场景生成器交互模式");
-  console.log("输入描述或输入'exit'退出");
-
-  const runInteractive = async () => {
-    try {
-      const agent = await createThreeAgent();
-
-      const askQuestion = () => {
-        rl.question("\n请描述你想要的3D场景: ", async (input) => {
-          if (input.toLowerCase() === "exit") {
-            rl.close();
-            return;
-          }
-
-          try {
-            console.log("处理中...");
-            const result = await agent.invoke({
-              input: input,
-              chat_history: [],
-            });
-
-            console.log("\n生成结果:");
-            console.log(result.output);
-          } catch (error) {
-            console.error("处理失败:", error);
-          }
-
-          askQuestion();
-        });
-      };
-
-      askQuestion();
-    } catch (error) {
-      console.error("初始化失败:", error);
-      rl.close();
-    }
-  };
-
-  runInteractive();
 }
 
 module.exports = {

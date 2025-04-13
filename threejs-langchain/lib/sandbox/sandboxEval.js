@@ -204,11 +204,62 @@ function createSandbox(THREE, renderer) {
         // 添加默认对象（如果没有添加任何对象）
         if (objectsAdded === 0) {
           console.log("未检测到对象添加，添加默认立方体");
-          const defaultGeo = new THREE.BoxGeometry(1, 1, 1);
-          const defaultMat = new THREE.MeshStandardMaterial({ color: 0xff0000 });
-          const cube = new THREE.Mesh(defaultGeo, defaultMat);
-          cube.position.y = 0.5;
-          scene.add(cube);
+           
+          // 再次检查代码中是否含有mesh或geometry创建但没有调用scene.add
+          if (processedCode.includes("new THREE.Mesh") || 
+              processedCode.includes("Mesh(") || 
+              processedCode.includes("geometry") ||
+              processedCode.includes("material")) {
+             
+            console.log("检测到代码创建了3D对象但未添加到场景，尝试查找并添加");
+             
+            // 尝试再次执行代码，强制执行scene.add
+            try {
+              let createdObjects = [];
+              let lastCreatedMesh = null;
+                 
+              // 替换Mesh构造函数以跟踪创建的对象
+              const originalMesh = THREE.Mesh;
+              THREE.Mesh = function() {
+                const mesh = new originalMesh(...arguments);
+                createdObjects.push(mesh);
+                lastCreatedMesh = mesh;
+                return mesh;
+              };
+                 
+              // 再次执行处理后的代码
+              eval(processedCode);
+                 
+              // 检查是否有创建的对象没有添加到场景
+              if (createdObjects.length > 0 && objectsAdded === 0) {
+                console.log("发现" + createdObjects.length + "个未添加的对象，自动添加到场景");
+                createdObjects.forEach(obj => {
+                  if (!scene.children.includes(obj)) {
+                    scene.add(obj);
+                    objectsAdded++;
+                  }
+                });
+              }
+                 
+              // 如果还是没有对象，但有找到最后创建的网格，则添加它
+              if (objectsAdded === 0 && lastCreatedMesh) {
+                console.log("添加最后创建的网格到场景");
+                scene.add(lastCreatedMesh);
+                objectsAdded++;
+              }
+            } catch(err) {
+              console.error("自动添加对象失败:", err);
+            }
+          }
+           
+          // 如果所有尝试都失败，添加默认立方体
+          if (objectsAdded === 0) {
+            const defaultGeo = new THREE.BoxGeometry(1, 1, 1);
+            const defaultMat = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+            const cube = new THREE.Mesh(defaultGeo, defaultMat);
+            cube.position.y = 0.5;
+            scene.add(cube);
+          }
         }
       `;
     } catch (error) {
@@ -408,10 +459,31 @@ function createSandbox(THREE, renderer) {
       /\bexport\s+/g,
     ];
 
+    let hasModuleSyntax = false;
     for (const pattern of modulePatterns) {
       if (pattern.test(code)) {
         console.warn("代码包含ES模块语法，将自动移除");
+        hasModuleSyntax = true;
       }
+    }
+
+    // 如果包含模块语法，尝试提取有效代码部分
+    if (hasModuleSyntax) {
+      // 记录原始长度
+      const originalLength = code.length;
+
+      // 移除import语句
+      code = code.replace(/^\s*import\s+.*?;?\s*$/gm, "");
+
+      // 移除export语句
+      code = code.replace(/^\s*export\s+.*?;?\s*$/gm, "");
+
+      // 移除default导出
+      code = code.replace(/^\s*export\s+default\s+.*?;?\s*$/gm, "");
+
+      console.log(
+        `移除了ES模块语法，代码长度从${originalLength}变为${code.length}`
+      );
     }
 
     // 检查其他危险操作
