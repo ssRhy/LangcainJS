@@ -248,6 +248,32 @@ wss.on("connection", (ws, req) => {
       } else if (data.type === "tool_response") {
         // 广播工具响应
         broadcast(data);
+      } else if (data.type === "code_execution") {
+        // 处理代码执行请求
+        console.log("收到代码执行请求");
+        
+        // 生成请求ID
+        const requestId = data.requestId || Date.now().toString();
+        
+        // 广播代码执行消息
+        broadcast({
+          type: "code_execution",
+          code: data.code,
+          mode: data.mode || "replace",
+          requestId
+        });
+        
+        // 如果有回调函数，发送成功响应
+        if (data.requestId) {
+          broadcast({
+            type: "tool_response",
+            requestId: data.requestId,
+            result: {
+              success: true,
+              message: "代码已发送到前端执行"
+            }
+          });
+        }
       }
     } catch (error) {
       console.error("处理WebSocket消息时出错:", error);
