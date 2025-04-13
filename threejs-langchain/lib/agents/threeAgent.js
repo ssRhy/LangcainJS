@@ -73,13 +73,107 @@ if (typeof window === "undefined") {
   };
 }
 
-// 配置 Azure OpenAI
+// 替换现有的formatMessage函数
+function formatMessage(message) {
+  if (!message) return message;
+
+  try {
+    // 处理数组类型的消息
+    if (Array.isArray(message)) {
+      return message.map((item) => formatMessage(item));
+    }
+
+    // 如果不是对象，则直接返回
+    if (typeof message !== "object" || message === null) {
+      return message;
+    }
+
+    // 创建克隆以避免修改原始对象
+    const formattedMessage = { ...message };
+
+    // 处理content字段 (关键部分)
+    if ("content" in formattedMessage) {
+      if (formattedMessage.content === null) {
+        // 将null转换为空字符串
+        formattedMessage.content = "";
+      } else if (
+        typeof formattedMessage.content === "object" &&
+        !Array.isArray(formattedMessage.content)
+      ) {
+        // 如果内容是对象但不是数组，将其转换为字符串
+        formattedMessage.content = JSON.stringify(formattedMessage.content);
+      } else if (Array.isArray(formattedMessage.content)) {
+        // 处理内容数组中的每个元素
+        formattedMessage.content = formattedMessage.content.map((item) => {
+          if (item === null) return "";
+          if (typeof item === "object") return JSON.stringify(item);
+          return item;
+        });
+      }
+    }
+
+    // 处理function_call字段
+    if (
+      formattedMessage.function_call &&
+      typeof formattedMessage.function_call === "object"
+    ) {
+      if (typeof formattedMessage.function_call.arguments === "object") {
+        formattedMessage.function_call = {
+          ...formattedMessage.function_call,
+          arguments: JSON.stringify(formattedMessage.function_call.arguments),
+        };
+      }
+    }
+
+    // 处理tool_calls字段
+    if (
+      formattedMessage.tool_calls &&
+      Array.isArray(formattedMessage.tool_calls)
+    ) {
+      formattedMessage.tool_calls = formattedMessage.tool_calls.map(
+        (toolCall) => {
+          if (
+            toolCall.function &&
+            typeof toolCall.function.arguments === "object"
+          ) {
+            return {
+              ...toolCall,
+              function: {
+                ...toolCall.function,
+                arguments: JSON.stringify(toolCall.function.arguments),
+              },
+            };
+          }
+          return toolCall;
+        }
+      );
+    }
+
+    return formattedMessage;
+  } catch (error) {
+    console.error("格式化消息时出错:", error);
+    // 如果格式化失败，返回原始消息，但始终确保content是字符串
+    if (message && message.content && typeof message.content === "object") {
+      return {
+        ...message,
+        content:
+          typeof message.content.toString === "function"
+            ? message.content.toString()
+            : JSON.stringify(message.content),
+      };
+    }
+    return message;
+  }
+}
+
+// 修改createAzureLLM以在更多位置应用formatMessage
 const createAzureLLM = (config = {}) => {
   try {
     // 尝试创建Azure版本
     console.log("尝试创建Azure OpenAI模型...");
 
-    return new AzureChatOpenAI({
+    // 创建原始模型
+    const azureOpenAI = new AzureChatOpenAI({
       model: "gpt-4o",
       temperature: 0,
       azureOpenAIApiKey:
@@ -94,14 +188,49 @@ const createAzureLLM = (config = {}) => {
       azureOpenAIApiEndpoint:
         config.azureOpenAIApiEndpoint || process.env.AZURE_OPENAI_ENDPOINT,
     });
+
+    // 包装核心方法以确保消息格式化
+    const originalInvokeMethod = azureOpenAI.invoke;
+    azureOpenAI.invoke = async function (messages, options) {
+      console.log("LLM.invoke被调用，确保消息格式化");
+
+      try {
+        // 确保每个消息都经过格式化
+        const formattedMessages = Array.isArray(messages)
+          ? messages.map((msg) => formatMessage(msg))
+          : formatMessage(messages);
+
+        // 对格式化后的消息应用原方法
+        return await originalInvokeMethod.call(
+          this,
+          formattedMessages,
+          options
+        );
+      } catch (err) {
+        console.error("调用LLM时出错:", err);
+        throw err;
+      }
+    };
+
+    // 包装_convertMessageToOpenAICompatible方法
+    if (azureOpenAI._convertMessageToOpenAICompatible) {
+      const originalConvertMethod =
+        azureOpenAI._convertMessageToOpenAICompatible;
+      azureOpenAI._convertMessageToOpenAICompatible = function (message) {
+        const formattedMessage = formatMessage(message);
+        return originalConvertMethod.call(this, formattedMessage);
+      };
+    }
+
+    // 返回包装后的模型
+    return azureOpenAI;
   } catch (error) {
     console.warn("创建Azure OpenAI模型失败:", error.message);
     console.log("尝试回退使用ChatOpenAI模型...");
 
-    // 尝试从非Azure导入ChatOpenAI
+    // 尝试回退
     try {
       const { ChatOpenAI } = require("@langchain/openai");
-
       return new ChatOpenAI({
         modelName: "gpt-3.5-turbo",
         temperature: 0,
@@ -268,7 +397,12 @@ execute_threejs_code工具执行代码。如果用户只是闲聊，你可以直
     new MessagesPlaceholder("agent_scratchpad"),
   ]);
 
-  return createToolCallingAgent({ llm, tools, prompt });
+  // 创建工具调用代理并确保所有消息都被格式化
+  return createToolCallingAgent({
+    llm,
+    tools,
+    prompt,
+  });
 };
 
 // 创建Three.js Agent - 主函数
@@ -319,7 +453,63 @@ async function createThreeAgent(config = {}) {
       tools,
       memory,
       verbose: true,
-      tags: ["threejs-agent", "conversation"], // 添加标签用于LangSmith过滤
+      tags: ["threejs-agent", "conversation"],
+
+      // 自定义调用方法，确保所有输入消息都被格式化
+      async invoke(input, options = {}) {
+        console.log("AgentExecutor.invoke被调用，格式化输入");
+
+        // 格式化聊天历史
+        if (input.chat_history) {
+          input.chat_history = Array.isArray(input.chat_history)
+            ? input.chat_history.map((msg) => formatMessage(msg))
+            : formatMessage(input.chat_history);
+        }
+
+        // 格式化其他潜在的消息字段
+        if (input.messages) {
+          input.messages = Array.isArray(input.messages)
+            ? input.messages.map((msg) => formatMessage(msg))
+            : formatMessage(input.messages);
+        }
+
+        // 格式化agent_scratchpad，这通常是问题所在
+        if (input.agent_scratchpad) {
+          input.agent_scratchpad = formatMessage(input.agent_scratchpad);
+        }
+
+        try {
+          // 原始的调用
+          return await super.invoke(input, options);
+        } catch (error) {
+          console.error("Agent调用错误:", error.message);
+          if (error.message.includes("Invalid type for 'messages")) {
+            console.log("检测到消息格式错误，尝试降级方案");
+            return {
+              output: `由于消息格式问题无法继续执行。请尝试简化您的请求。错误: ${error.message}`,
+            };
+          }
+          return {
+            output: `执行出错: ${error.message}`,
+          };
+        }
+      },
+
+      // 处理Agent动作并添加思考过程到消息队列
+      handleAgentAction(action, runManager) {
+        console.log("Agent执行动作:", action.tool);
+        if (typeof addMessageToQueue === "function") {
+          addMessageToQueue({
+            type: "agent_thinking",
+            content: `我需要使用${action.tool}工具: ${
+              action.toolInput.description ||
+              action.toolInput.code ||
+              JSON.stringify(action.toolInput)
+            }`,
+          });
+        }
+        return action;
+      },
     });
 
     console.log("Agent创建成功!");
@@ -380,4 +570,7 @@ if (require.main === module) {
   runInteractive();
 }
 
-module.exports = { createThreeAgent };
+module.exports = {
+  createThreeAgent,
+  formatMessage, // 导出格式化函数供其他模块使用
+};

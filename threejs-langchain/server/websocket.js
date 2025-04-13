@@ -30,6 +30,7 @@ console.log(
 // 处理动态加载模块
 let addMessageToQueue;
 let createThreeAgent;
+let formatMessage;
 
 // 从ES模块或文件动态加载功能
 async function loadFunctionality() {
@@ -40,7 +41,7 @@ async function loadFunctionality() {
 
     if (fs.existsSync(messagesPath)) {
       try {
-        // 使用动态import替代require
+        // 使用CommonJS方式加载
         const messagesModule = require(messagesPath);
         addMessageToQueue = messagesModule.addMessageToQueue;
         console.log("成功加载messages模块");
@@ -82,22 +83,26 @@ async function loadFunctionality() {
 
     if (fs.existsSync(agentPath)) {
       try {
-        // 使用动态import替代require
+        // 使用CommonJS方式加载
         const agentModule = require(agentPath);
         createThreeAgent = agentModule.createThreeAgent;
+        formatMessage = agentModule.formatMessage || ((msg) => msg);
         console.log("成功加载threeAgent模块");
       } catch (err) {
         console.warn(`无法直接加载threeAgent模块: ${err.message}`);
         // 创建模拟Agent
         createThreeAgent = createMockAgent;
+        formatMessage = (msg) => msg;
       }
     } else {
       console.warn(`Agent模块文件不存在: ${agentPath}`);
       createThreeAgent = createMockAgent;
+      formatMessage = (msg) => msg;
     }
   } catch (error) {
     console.error("加载Agent失败:", error);
     createThreeAgent = createMockAgent;
+    formatMessage = (msg) => msg;
   }
 }
 
@@ -161,10 +166,15 @@ wss.on("connection", (ws, req) => {
           const agent = await createThreeAgent();
           console.log("Agent创建成功，开始处理请求...");
 
+          // 确保聊天历史格式正确
+          const chatHistory = Array.isArray(data.chatHistory)
+            ? data.chatHistory.map((msg) => formatMessage(msg))
+            : [];
+
           // 执行Agent
           const result = await agent.invoke({
             input: data.content,
-            chat_history: [],
+            chat_history: chatHistory,
           });
 
           console.log("Agent处理完成");
