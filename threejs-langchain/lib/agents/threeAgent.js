@@ -74,232 +74,49 @@ if (typeof window === "undefined") {
 }
 
 // 替换现有的formatMessage函数
-function formatMessage(message) {
-  // 检查输入
-  if (!message) return message;
-
-  // 控制台记录消息类型，帮助调试
-  console.log(
-    "格式化消息，类型:",
-    typeof message,
-    "是数组:",
-    Array.isArray(message),
-    "Role:",
-    message.role || "无role"
-  );
-
+function formatMessage(msg) {
   try {
-    // 处理数组类型的消息
-    if (Array.isArray(message)) {
-      console.log("处理消息数组，长度:", message.length);
-      return message.map((msg) => formatMessage(msg));
-    }
-
-    // 如果不是对象，则直接返回
-    if (typeof message !== "object" || message === null) {
-      return message;
-    }
-
-    // 深度克隆消息对象，避免修改原始对象
-    const formattedMessage = { ...message };
-
-    // 特殊处理agent_scratchpad字段，这是常见的问题源
-    if ("agent_scratchpad" in formattedMessage) {
-      console.log("处理agent_scratchpad");
-      if (
-        typeof formattedMessage.agent_scratchpad === "object" &&
-        formattedMessage.agent_scratchpad !== null
-      ) {
-        if (Array.isArray(formattedMessage.agent_scratchpad)) {
-          formattedMessage.agent_scratchpad =
-            formattedMessage.agent_scratchpad.map((item) =>
-              formatMessage(item)
-            );
-        } else {
-          // 如果是非数组对象，转换为JSON字符串
-          formattedMessage.agent_scratchpad = JSON.stringify(
-            formattedMessage.agent_scratchpad
-          );
-        }
-      }
-    }
-
-    // 处理content字段 (关键部分)
-    if ("content" in formattedMessage) {
-      console.log("处理content字段，类型:", typeof formattedMessage.content);
-
-      // 处理null内容
-      if (formattedMessage.content === null) {
-        formattedMessage.content = "";
-      }
-      // 处理对象内容（非数组）
-      else if (
-        typeof formattedMessage.content === "object" &&
-        !Array.isArray(formattedMessage.content)
-      ) {
-        console.log("将对象内容转换为字符串");
-        formattedMessage.content = JSON.stringify(formattedMessage.content);
-      }
-      // 处理数组内容
-      else if (Array.isArray(formattedMessage.content)) {
-        console.log("处理数组内容，长度:", formattedMessage.content.length);
-        // 处理内容数组中的每个元素
-        formattedMessage.content = formattedMessage.content.map((item) => {
-          if (item === null) return "";
-          if (typeof item === "object") {
-            // 确保数组中的对象被正确序列化
-            return JSON.stringify(item);
-          }
-          return item;
-        });
-      }
-    }
-
-    // 特殊处理additional_kwargs字段 - 这个字段在LangChain中常见
+    // If it's already a valid message object with role and content
     if (
-      formattedMessage.additional_kwargs &&
-      typeof formattedMessage.additional_kwargs === "object"
+      msg &&
+      typeof msg === "object" &&
+      msg.role &&
+      msg.content !== undefined
     ) {
-      const additionalKwargs = { ...formattedMessage.additional_kwargs };
-
-      // 处理function_call字段
-      if (
-        additionalKwargs.function_call &&
-        typeof additionalKwargs.function_call === "object"
-      ) {
-        if (typeof additionalKwargs.function_call.arguments === "object") {
-          additionalKwargs.function_call = {
-            ...additionalKwargs.function_call,
-            arguments: JSON.stringify(additionalKwargs.function_call.arguments),
-          };
-        }
-      }
-
-      // 处理tool_calls字段
-      if (
-        additionalKwargs.tool_calls &&
-        Array.isArray(additionalKwargs.tool_calls)
-      ) {
-        additionalKwargs.tool_calls = additionalKwargs.tool_calls.map(
-          (toolCall) => {
-            if (
-              toolCall.function &&
-              typeof toolCall.function.arguments === "object"
-            ) {
-              return {
-                ...toolCall,
-                function: {
-                  ...toolCall.function,
-                  arguments: JSON.stringify(toolCall.function.arguments),
-                },
-              };
-            }
-            return toolCall;
-          }
-        );
-      }
-
-      formattedMessage.additional_kwargs = additionalKwargs;
-    }
-
-    // 处理function_call字段 (主对象上)
-    if (
-      formattedMessage.function_call &&
-      typeof formattedMessage.function_call === "object"
-    ) {
-      if (
-        typeof formattedMessage.function_call.arguments === "object" &&
-        formattedMessage.function_call.arguments !== null
-      ) {
-        formattedMessage.function_call = {
-          ...formattedMessage.function_call,
-          arguments: JSON.stringify(formattedMessage.function_call.arguments),
+      // Handle object content specially - convert to string
+      if (typeof msg.content === "object" && !Array.isArray(msg.content)) {
+        return {
+          role: msg.role,
+          content: JSON.stringify(msg.content),
         };
       }
+      return msg;
     }
 
-    // 处理tool_calls字段 (主对象上)
-    if (
-      formattedMessage.tool_calls &&
-      Array.isArray(formattedMessage.tool_calls)
-    ) {
-      formattedMessage.tool_calls = formattedMessage.tool_calls.map(
-        (toolCall) => {
-          if (
-            toolCall.function &&
-            typeof toolCall.function.arguments === "object" &&
-            toolCall.function.arguments !== null
-          ) {
-            return {
-              ...toolCall,
-              function: {
-                ...toolCall.function,
-                arguments: JSON.stringify(toolCall.function.arguments),
-              },
-            };
-          }
-          return toolCall;
-        }
-      );
+    // If it's a string, make it a user message
+    if (typeof msg === "string") {
+      return { role: "user", content: msg };
     }
 
-    // 处理其他可能包含嵌套结构的字段
-    Object.keys(formattedMessage).forEach((key) => {
-      if (
-        ![
-          "content",
-          "function_call",
-          "tool_calls",
-          "additional_kwargs",
-          "agent_scratchpad",
-        ].includes(key) &&
-        typeof formattedMessage[key] === "object" &&
-        formattedMessage[key] !== null
-      ) {
-        // 递归处理嵌套对象
-        if (Array.isArray(formattedMessage[key])) {
-          formattedMessage[key] = formattedMessage[key].map((item) =>
-            formatMessage(item)
-          );
-        } else {
-          formattedMessage[key] = formatMessage(formattedMessage[key]);
-        }
+    // If it's an object without proper structure
+    if (msg && typeof msg === "object") {
+      // Try to extract role and content
+      const role = msg.role || "user";
+      let content = msg.content || msg.text || JSON.stringify(msg);
+
+      // Handle object content
+      if (typeof content === "object" && !Array.isArray(content)) {
+        content = JSON.stringify(content);
       }
-    });
 
-    return formattedMessage;
+      return { role, content };
+    }
+
+    // Fallback
+    return { role: "user", content: String(msg || "") };
   } catch (error) {
-    console.error("格式化消息时出错:", error);
-    // 如果格式化失败，返回强制转换的消息
-    try {
-      // 确保content是字符串
-      if (message && message.content && typeof message.content === "object") {
-        message = {
-          ...message,
-          content: JSON.stringify(message.content),
-        };
-      }
-
-      // 确保agent_scratchpad是字符串或简单数组
-      if (
-        message &&
-        message.agent_scratchpad &&
-        typeof message.agent_scratchpad === "object"
-      ) {
-        if (!Array.isArray(message.agent_scratchpad)) {
-          message.agent_scratchpad = JSON.stringify(message.agent_scratchpad);
-        }
-      }
-
-      return message;
-    } catch (e) {
-      console.error("紧急消息修复失败:", e);
-      // 最后的手段：返回带有默认信息的空消息
-      return {
-        role: message?.role || "assistant",
-        content: "消息格式化错误，请重试",
-      };
-    }
+    console.error("Error formatting message:", error);
+    return { role: "user", content: "Error formatting message" };
   }
 }
 
@@ -329,53 +146,34 @@ const createAzureLLM = (config = {}) => {
     // 声明一个sanitizeMessagesForAPI函数来严格确保消息内容符合API要求
     function sanitizeMessagesForAPI(messages) {
       if (!Array.isArray(messages)) {
-        console.warn("sanitizeMessagesForAPI: 输入不是数组");
-        return messages;
+        console.warn(
+          "sanitizeMessagesForAPI: messages is not an array, fixing..."
+        );
+        return [{ role: "user", content: String(messages || "") }];
       }
 
-      // 记录输入消息数量以帮助调试
-      console.log(`sanitizeMessagesForAPI: 处理 ${messages.length} 条消息`);
+      try {
+        return messages.map((msg) => {
+          // Ensure message has role and content
+          if (!msg.role) msg.role = "user";
 
-      return messages
-        .map((msg, index) => {
-          try {
-            if (!msg) return null;
-
-            // 创建安全消息副本
-            const sanitizedMsg = { ...msg };
-
-            // 强制将content转换为字符串或数组
-            if ("content" in sanitizedMsg) {
-              // 尝试安全转换
-              if (sanitizedMsg.content === null) {
-                sanitizedMsg.content = "";
-              } else if (
-                typeof sanitizedMsg.content === "object" &&
-                !Array.isArray(sanitizedMsg.content)
-              ) {
-                // 使用JSON.stringify处理非数组对象
-                console.log(
-                  `sanitizeMessagesForAPI: 消息[${index}]的content是对象，转换为字符串`
-                );
-                sanitizedMsg.content = JSON.stringify(sanitizedMsg.content);
-              }
-            }
-
-            // 保证role字段存在并有效
-            if (!sanitizedMsg.role || typeof sanitizedMsg.role !== "string") {
-              console.warn(
-                `sanitizeMessagesForAPI: 消息[${index}]的role无效，设为system`
-              );
-              sanitizedMsg.role = "system";
-            }
-
-            return sanitizedMsg;
-          } catch (e) {
-            console.error(`sanitizeMessagesForAPI: 消息[${index}]处理失败:`, e);
-            return { role: "system", content: "消息处理失败" };
+          // Handle content formatting
+          if (msg.content === undefined || msg.content === null) {
+            msg.content = "";
+          } else if (
+            typeof msg.content === "object" &&
+            !Array.isArray(msg.content)
+          ) {
+            // Convert object content to string to avoid "object instead of string or array" error
+            msg.content = JSON.stringify(msg.content);
           }
-        })
-        .filter(Boolean); // 过滤掉可能的null值
+
+          return msg;
+        });
+      } catch (err) {
+        console.error("Error sanitizing messages:", err);
+        return [{ role: "user", content: "Error processing messages" }];
+      }
     }
 
     // 深度包装API调用，确保消息格式正确
@@ -392,6 +190,24 @@ const createAzureLLM = (config = {}) => {
 
             // 然后应用严格的sanitize函数
             inputs.messages = sanitizeMessagesForAPI(formattedMessages);
+
+            // 添加额外的验证和修复步骤，确保所有消息内容都是字符串
+            inputs.messages = inputs.messages.map((msg, idx) => {
+              if (
+                msg &&
+                typeof msg.content === "object" &&
+                !Array.isArray(msg.content)
+              ) {
+                console.log(
+                  `紧急修复：消息[${idx}]的content是对象，强制转换为字符串`
+                );
+                return {
+                  ...msg,
+                  content: JSON.stringify(msg.content),
+                };
+              }
+              return msg;
+            });
 
             // 输出最终的消息结构便于调试
             console.log("最终消息数量:", inputs.messages.length);
@@ -421,12 +237,34 @@ const createAzureLLM = (config = {}) => {
           ) {
             console.log("尝试紧急修复消息格式...");
 
-            // 紧急修复：将所有消息简化为最基本的字符串形式
-            const simplifiedMessages = inputs.messages.map((msg) => ({
-              role: msg.role || "system",
-              content:
-                typeof msg.content === "string" ? msg.content : "内容格式错误",
-            }));
+            // 改进的紧急修复：只保留基本字符串格式，丢弃复杂结构
+            const simplifiedMessages = inputs.messages.map((msg) => {
+              // 确保role是有效字符串
+              const role = typeof msg.role === "string" ? msg.role : "system";
+
+              // 处理content字段
+              let content = "";
+              if (typeof msg.content === "string") {
+                content = msg.content;
+              } else if (Array.isArray(msg.content)) {
+                // 如果是数组，确保每个元素都是字符串或简单对象
+                content = msg.content.map((item) =>
+                  typeof item === "string"
+                    ? item
+                    : typeof item === "object" && item !== null
+                    ? JSON.stringify(item)
+                    : String(item || "")
+                );
+              } else if (msg.content === null || msg.content === undefined) {
+                content = "";
+              } else if (typeof msg.content === "object") {
+                content = JSON.stringify(msg.content);
+              } else {
+                content = String(msg.content);
+              }
+
+              return { role, content };
+            });
 
             // 重试调用
             try {
@@ -554,10 +392,13 @@ const createBasicTools = (sessionId) => [
 复杂度：${complexity}
 代码要求：
 1. 包含场景、相机、渲染器、光源和动画循环
-2. 使用CDN引入three.js库（版本0.158.0）
-3. 代码应该是完整可运行的HTML文件
-4. 用户可调整的参数使用注释标注
-5. 包含基本的交互控制`,
+2. 使用普通script标签（不要使用type="module"）和普通script src引入three.js库
+3. 不要使用import/export语句，直接使用全局THREE对象
+4. 代码必须使用普通JavaScript语法，不使用ES模块语法
+5. 使用CDN引入three.js库（版本0.158.0）：https://cdnjs.cloudflare.com/ajax/libs/three.js/0.158.0/three.min.js
+6. 代码应该是完整可运行的HTML文件
+7. 用户可调整的参数使用注释标注
+8. 包含基本的交互控制`,
         ],
         ["human", "{input}"],
       ]);

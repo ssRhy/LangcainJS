@@ -35,6 +35,26 @@ function createSandbox(THREE, renderer) {
       disposeResources();
     }
 
+    // 尝试预处理代码
+    try {
+      // 如果是HTML代码，尝试提取<script>部分
+      if (code.includes("<!DOCTYPE html>") || code.includes("<html>")) {
+        const scriptMatch = code.match(/<script[^>]*>([\s\S]*?)<\/script>/i);
+        if (scriptMatch && scriptMatch[1]) {
+          code = scriptMatch[1].trim();
+        }
+      }
+
+      // 移除可能的import语句
+      code = code.replace(/^\s*import\s+.*?;?\s*$/gm, "// 已移除import语句");
+      code = code.replace(/^\s*export\s+.*?;?\s*$/gm, "// 已移除export语句");
+    } catch (error) {
+      console.warn("代码预处理错误，继续尝试原始代码:", error);
+    }
+
+    // 对代码进行一些安全检查
+    validateCode(code);
+
     // 创建沙箱环境
     const sandbox = {
       THREE,
@@ -109,9 +129,6 @@ function createSandbox(THREE, renderer) {
       }
     });
 
-    // 对代码进行一些安全检查
-    validateCode(code);
-
     // 构建安全执行函数
     const wrappedCode = `
       "use strict";
@@ -138,7 +155,24 @@ function createSandbox(THREE, renderer) {
 
   // 验证代码安全性
   function validateCode(code) {
-    // 检查危险操作
+    // 检查ES模块语法
+    const modulePatterns = [
+      /\bimport\s+.*from\s+/g,
+      /\bimport\s+{.*}\s+from\s+/g,
+      /\bimport\s+\*/g,
+      /\bimport\s*\(/g,
+      /\bexport\s+/g,
+    ];
+
+    for (const pattern of modulePatterns) {
+      if (pattern.test(code)) {
+        throw new Error(
+          "代码包含ES模块语法（import/export），请使用普通JavaScript语法"
+        );
+      }
+    }
+
+    // 检查其他危险操作
     const dangerousPatterns = [
       /\beval\s*\(/g,
       /\bFunction\s*\(/g,
@@ -156,6 +190,11 @@ function createSandbox(THREE, renderer) {
       if (pattern.test(code)) {
         throw new Error("代码包含不安全操作");
       }
+    }
+
+    // 检查HTML代码而不是JavaScript片段
+    if (code.includes("<!DOCTYPE html>") || code.includes("<html>")) {
+      throw new Error("代码是完整的HTML文件，需要提取JavaScript部分才能执行");
     }
   }
 
