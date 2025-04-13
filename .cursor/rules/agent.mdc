@@ -13,4 +13,5 @@ make threejs a tool to langchain agent. the agent can write threejs code and cmo
 5.不要随意改api接口和函数，我要严格规定的langchainjs格式，阅读langchainjs0.3 api的官方文档
 6.同时与Azure Open AI兼容
 7.使用websocket实现前后端通信和传输而不是模拟等待
-8.Node.js服务器使用的是CommonJS(require)。需要统一导入导出语法。
+8.Node.js服务器使用的是CommonJS(require)。需要统一导入导出语法。完全移除了ES模块语法，改用CommonJS格式
+确保了所有模块之间的兼容性

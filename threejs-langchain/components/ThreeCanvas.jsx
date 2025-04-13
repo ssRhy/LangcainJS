@@ -8,7 +8,17 @@ import {
   useImperativeHandle,
 } from "react";
 import * as THREE from "three";
+// 修改导入方式，支持多种模块格式
 import { createSandbox } from "@/lib/sandbox/sandboxEval";
+
+// 添加一个备用导入方法，防止上面的方式失败
+let sandboxModule;
+try {
+  sandboxModule = require("@/lib/sandbox/sandboxEval");
+} catch (e) {
+  // 如果require失败，则不处理，使用上面的import
+  console.log("备用导入方法未生效，继续使用import");
+}
 
 const ThreeCanvas = forwardRef(function ThreeCanvas(props, ref) {
   const canvasRef = useRef(null);
@@ -27,8 +37,24 @@ const ThreeCanvas = forwardRef(function ThreeCanvas(props, ref) {
     renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     rendererRef.current = renderer;
 
-    // 创建安全沙箱
-    sandboxRef.current = createSandbox(THREE, renderer);
+    // 创建安全沙箱，尝试不同的导入方式
+    let sandboxCreate = createSandbox;
+    if (!sandboxCreate && sandboxModule && sandboxModule.createSandbox) {
+      sandboxCreate = sandboxModule.createSandbox;
+    }
+
+    // 如果都不可用，尝试从全局对象获取
+    if (!sandboxCreate && typeof window !== "undefined" && window.SandboxEval) {
+      sandboxCreate = window.SandboxEval.createSandbox;
+    }
+
+    if (!sandboxCreate) {
+      setLastError("无法加载沙箱模块");
+      console.error("无法加载沙箱模块");
+      return;
+    }
+
+    sandboxRef.current = sandboxCreate(THREE, renderer);
 
     // 初始化基本场景
     const { scene, camera } = initDefaultScene();

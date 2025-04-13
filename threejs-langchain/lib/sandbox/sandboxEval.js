@@ -1,4 +1,5 @@
-export function createSandbox(THREE, renderer) {
+// 修改为支持双模块系统的格式
+function createSandbox(THREE, renderer) {
   // 跟踪创建的资源以便清理
   const resources = {
     geometries: [],
@@ -186,4 +187,25 @@ export function createSandbox(THREE, renderer) {
     execute,
     disposeResources,
   };
+}
+
+// 兼容ES Module和CommonJS
+// 检测是否在ES Module环境
+if (typeof exports === "object" && typeof module !== "undefined") {
+  // CommonJS环境
+  module.exports = { createSandbox };
+} else if (typeof define === "function" && define.amd) {
+  // AMD环境
+  define([], function () {
+    return { createSandbox };
+  });
+} else {
+  // 浏览器全局环境或ES Module
+  if (typeof window !== "undefined") {
+    window.SandboxEval = { createSandbox };
+  }
+  // 支持ES Module导出
+  if (typeof exports !== "undefined") {
+    exports.createSandbox = createSandbox;
+  }
 }
