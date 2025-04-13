@@ -12,6 +12,8 @@ function createSandbox(THREE, renderer) {
   // 安全地执行代码
   async function execute(code, context) {
     const { scene, camera, mode } = context;
+    console.log("执行代码开始，代码长度:", code.length);
+    console.log("代码前30个字符:", code.substring(0, 30));
 
     // 如果是替换模式，先清理场景
     if (mode === "replace") {
@@ -36,26 +38,251 @@ function createSandbox(THREE, renderer) {
     }
 
     // 尝试预处理代码
+    let processedCode = code;
     try {
-      // 如果是HTML代码，尝试提取<script>部分
-      if (code.includes("<!DOCTYPE html>") || code.includes("<html>")) {
-        const scriptMatch = code.match(/<script[^>]*>([\s\S]*?)<\/script>/i);
-        if (scriptMatch && scriptMatch[1]) {
-          code = scriptMatch[1].trim();
+      // 增强的代码格式识别和处理
+
+      // 1. 检查是否为HTML代码，尝试提取<script>部分
+      if (
+        code.includes("<!DOCTYPE html>") ||
+        code.includes("<html>") ||
+        code.includes("<script>")
+      ) {
+        console.log("检测到HTML或script标签，提取script内容");
+
+        // 尝试提取所有脚本内容并合并
+        const scriptMatches = code.match(/<script[^>]*>([\s\S]*?)<\/script>/gi);
+        if (scriptMatches && scriptMatches.length > 0) {
+          const extractedScripts = scriptMatches
+            .map((script) => {
+              const content = script.match(
+                /<script[^>]*>([\s\S]*?)<\/script>/i
+              )[1];
+              return content.trim();
+            })
+            .join("\n\n");
+
+          processedCode = extractedScripts;
+          console.log("成功提取脚本，长度:", processedCode.length);
+        } else {
+          console.warn(
+            "未能从HTML提取脚本，将尝试从整个代码中查找THREE相关代码..."
+          );
         }
       }
 
-      // 移除可能的import语句
-      code = code.replace(/^\s*import\s+.*?;?\s*$/gm, "// 已移除import语句");
-      code = code.replace(/^\s*export\s+.*?;?\s*$/gm, "// 已移除export语句");
+      // 2. 检查是否为Markdown代码块，尝试提取```js```部分
+      const markdownCodeBlockRegex = /```(?:javascript|js)?\s*([\s\S]*?)```/;
+      const markdownMatch = code.match(markdownCodeBlockRegex);
+      if (markdownMatch && markdownMatch[1]) {
+        console.log("检测到Markdown代码块，提取JavaScript代码");
+        processedCode = markdownMatch[1].trim();
+      }
+
+      // 3. 尝试提取包含THREE相关的代码段（如果前面的方法都不适用）
+      if (
+        processedCode === code &&
+        (code.includes("THREE") ||
+          code.includes("scene.add") ||
+          code.includes("new Mesh"))
+      ) {
+        console.log("尝试直接从代码中识别Three.js相关部分");
+        // 查找常见的THREE对象创建模式
+        const patterns = [
+          /new\s+THREE\.([A-Za-z]+)/,
+          /const\s+([a-zA-Z0-9_]+)\s*=\s*new\s+THREE\.([A-Za-z]+)/,
+          /scene\.add\(/,
+        ];
+
+        for (const pattern of patterns) {
+          if (pattern.test(code)) {
+            // 找到匹配项，保留整个代码
+            processedCode = code;
+            console.log("找到THREE相关代码");
+            break;
+          }
+        }
+      }
+
+      // 移除可能的import/export语句
+      processedCode = processedCode.replace(
+        /^\s*import\s+.*?;?\s*$/gm,
+        "// 已移除import语句"
+      );
+      processedCode = processedCode.replace(
+        /^\s*export\s+.*?;?\s*$/gm,
+        "// 已移除export语句"
+      );
+
+      // 如果代码中包含使用document的部分，尝试替换或移除
+      processedCode = processedCode.replace(
+        /document\.getElementById\(['"](.*?)['"]\)/g,
+        "/* 已移除DOM操作 */"
+      );
+
+      // 如果代码中创建新的THREE.Scene()，替换为使用已有的scene
+      processedCode = processedCode.replace(
+        /const\s+([a-zA-Z0-9_]+)\s*=\s*new\s+THREE\.Scene\(\)/g,
+        "const $1 = scene"
+      );
+
+      // 如果代码中创建新的renderer，移除这部分
+      processedCode = processedCode.replace(
+        /const\s+([a-zA-Z0-9_]+)\s*=\s*new\s+THREE\.WebGLRenderer\(.*?\)/g,
+        "const $1 = renderer"
+      );
+
+      // 移除可能的animate或requestAnimationFrame循环
+      processedCode = processedCode.replace(
+        /function\s+animate\s*\(\s*\)\s*{[\s\S]*?requestAnimationFrame\s*\(\s*animate\s*\)[\s\S]*?}/g,
+        "// 已移除动画循环"
+      );
+
+      // 移除直接调用的requestAnimationFrame
+      processedCode = processedCode.replace(
+        /requestAnimationFrame\s*\(\s*animate\s*\)/g,
+        "// 已移除requestAnimationFrame调用"
+      );
+
+      // 添加更详细的调试输出，检查是否添加了objects
+      processedCode = `
+        // 添加调试跟踪
+        console.log("沙箱内执行Three.js代码开始");
+        
+        let objectsAdded = 0;
+        let geometriesCreated = 0;
+        let materialsCreated = 0;
+        const originalAdd = scene.add;
+        
+        scene.add = function() {
+          objectsAdded++;
+          console.log("添加对象到场景:", ...arguments);
+          return originalAdd.apply(this, arguments);
+        };
+        
+        // 包装几何体创建
+        const originalBoxGeometry = THREE.BoxGeometry;
+        THREE.BoxGeometry = function() {
+          geometriesCreated++;
+          console.log("创建BoxGeometry");
+          return new originalBoxGeometry(...arguments);
+        };
+        
+        // 包装材质创建
+        const originalMeshStandardMaterial = THREE.MeshStandardMaterial;
+        THREE.MeshStandardMaterial = function() {
+          materialsCreated++;
+          console.log("创建MeshStandardMaterial");
+          return new originalMeshStandardMaterial(...arguments);
+        };
+        
+        try {
+          // 代码执行前确保场景已经初始化
+          console.log("场景初始状态:", { 
+            children: scene.children.length,
+            camera: camera ? "已设置" : "未设置" 
+          });
+          
+          // 执行处理后的代码
+          ${processedCode}
+          
+          // 执行后检查场景状态
+          console.log("代码执行结束，场景状态:", { 
+            children: scene.children.length,
+            objectsAdded: objectsAdded,
+            geometriesCreated: geometriesCreated,
+            materialsCreated: materialsCreated
+          });
+        } catch(err) {
+          console.error("代码执行异常:", err);
+          console.error("异常堆栈:", err.stack);
+        }
+        
+        // 检查是否有对象被添加
+        console.log("共添加了 " + objectsAdded + " 个对象到场景");
+        
+        // 添加默认对象（如果没有添加任何对象）
+        if (objectsAdded === 0) {
+          console.log("未检测到对象添加，添加默认立方体");
+          const defaultGeo = new THREE.BoxGeometry(1, 1, 1);
+          const defaultMat = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+          const cube = new THREE.Mesh(defaultGeo, defaultMat);
+          cube.position.y = 0.5;
+          scene.add(cube);
+        }
+      `;
     } catch (error) {
       console.warn("代码预处理错误，继续尝试原始代码:", error);
+      processedCode = `
+        try {
+          ${code}
+        } catch(err) {
+          console.error("代码执行异常:", err);
+        }
+        
+        // 检查是否需要添加默认对象
+        if (scene.children.length <= 2) {
+          console.log("场景中对象不足，添加默认立方体");
+          const defaultGeo = new THREE.BoxGeometry(1, 1, 1);
+          const defaultMat = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+          const cube = new THREE.Mesh(defaultGeo, defaultMat);
+          cube.position.y = 0.5;
+          scene.add(cube);
+        }
+      `;
     }
 
-    // 对代码进行一些安全检查
-    validateCode(code);
+    try {
+      // 对代码进行安全检查，但允许大多数Three.js特定代码
+      validateCode(code);
 
-    // 创建沙箱环境
+      // 创建更丰富的沙箱环境
+      const sandbox = createEnhancedSandbox(
+        THREE,
+        scene,
+        camera,
+        renderer,
+        resources
+      );
+
+      // 构建安全执行函数
+      const wrappedCode = `
+        "use strict";
+        return (async function() {
+          try {
+            ${processedCode}
+            return { success: true };
+          } catch (error) {
+            return { success: false, error: error.message };
+          }
+        })();
+      `;
+
+      // 执行代码
+      const result = new Function(...Object.keys(sandbox), wrappedCode)(
+        ...Object.values(sandbox)
+      );
+
+      return await result;
+    } catch (error) {
+      console.error("代码执行最终错误:", error);
+      // 即使出错也尝试在场景中添加一个错误提示立方体
+      try {
+        const errorGeo = new THREE.BoxGeometry(1, 1, 1);
+        const errorMat = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+        const errorCube = new THREE.Mesh(errorGeo, errorMat);
+        errorCube.position.set(0, 0.5, 0);
+        scene.add(errorCube);
+      } catch (e) {
+        console.error("添加错误提示立方体失败:", e);
+      }
+
+      throw new Error(`代码执行错误: ${error.message}`);
+    }
+  }
+
+  // 创建增强的沙箱环境
+  function createEnhancedSandbox(THREE, scene, camera, renderer, resources) {
     const sandbox = {
       THREE,
       scene,
@@ -96,23 +323,61 @@ function createSandbox(THREE, renderer) {
         resources.mixers.push(mixer);
         return mixer;
       },
+      // 添加常用的Three.js方法和属性
+      Math: Math,
+      // 添加Vector3帮助器
+      Vector3: THREE.Vector3,
+      // 添加常用颜色变量
+      Color: THREE.Color,
+      // 添加常用常量
+      PI: Math.PI,
+      // 添加场景工具方法
+      centerObject: (obj) => {
+        if (obj.geometry) {
+          obj.geometry.computeBoundingBox();
+          obj.position.set(0, obj.geometry.boundingBox.max.y / 2, 0);
+        }
+        return obj;
+      },
     };
 
-    // 添加安全的THREE对象工厂方法
+    // 添加所有常用的THREE对象工厂方法
     const safeFactories = [
       "BoxGeometry",
       "SphereGeometry",
       "PlaneGeometry",
       "CylinderGeometry",
       "TorusGeometry",
+      "TorusKnotGeometry",
+      "ConeGeometry",
+      "CircleGeometry",
+      "RingGeometry",
+      "TetrahedronGeometry",
+      "OctahedronGeometry",
+      "DodecahedronGeometry",
       "MeshBasicMaterial",
       "MeshStandardMaterial",
       "MeshPhongMaterial",
       "MeshLambertMaterial",
+      "MeshDepthMaterial",
+      "MeshNormalMaterial",
       "TextureLoader",
       "Vector2",
       "Vector3",
       "Color",
+      "Quaternion",
+      "Euler",
+      "Box3",
+      "Sphere",
+      "Raycaster",
+      "Mesh",
+      "Group",
+      "Object3D",
+      "PointLight",
+      "SpotLight",
+      "DirectionalLight",
+      "AmbientLight",
+      "HemisphereLight",
     ];
 
     safeFactories.forEach((factory) => {
@@ -129,28 +394,7 @@ function createSandbox(THREE, renderer) {
       }
     });
 
-    // 构建安全执行函数
-    const wrappedCode = `
-      "use strict";
-      return (async function() {
-        try {
-          ${code}
-          return { success: true };
-        } catch (error) {
-          return { success: false, error: error.message };
-        }
-      })();
-    `;
-
-    // 执行代码
-    try {
-      const result = new Function(...Object.keys(sandbox), wrappedCode)(
-        ...Object.values(sandbox)
-      );
-      return await result;
-    } catch (error) {
-      throw new Error(`代码执行错误: ${error.message}`);
-    }
+    return sandbox;
   }
 
   // 验证代码安全性
@@ -166,9 +410,7 @@ function createSandbox(THREE, renderer) {
 
     for (const pattern of modulePatterns) {
       if (pattern.test(code)) {
-        throw new Error(
-          "代码包含ES模块语法（import/export），请使用普通JavaScript语法"
-        );
+        console.warn("代码包含ES模块语法，将自动移除");
       }
     }
 
@@ -190,11 +432,6 @@ function createSandbox(THREE, renderer) {
       if (pattern.test(code)) {
         throw new Error("代码包含不安全操作");
       }
-    }
-
-    // 检查HTML代码而不是JavaScript片段
-    if (code.includes("<!DOCTYPE html>") || code.includes("<html>")) {
-      throw new Error("代码是完整的HTML文件，需要提取JavaScript部分才能执行");
     }
   }
 
