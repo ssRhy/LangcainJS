@@ -6,15 +6,9 @@ const dotenv = require("dotenv");
 // 加载环境变量
 dotenv.config();
 
-// 在其他代码前先输出环境变量状态
-console.log(
-  "环境变量检查: AZURE_OPENAI_API_KEY:",
-  process.env.AZURE_OPENAI_API_KEY ? "已设置" : "未设置"
-);
-console.log(
-  "环境变量检查: AZURE_OPENAI_ENDPOINT:",
-  process.env.AZURE_OPENAI_ENDPOINT ? "已设置" : "未设置"
-);
+// 明确指定端口
+const WS_PORT = process.env.WS_PORT || 3001;
+console.log(`将使用端口 ${WS_PORT} 启动WebSocket服务器`);
 
 // 加载WebSocket服务
 console.log("开始初始化服务器...");
@@ -28,10 +22,9 @@ console.log("获取到服务器实例");
 console.log("正在启动WebSocket服务器...");
 
 // 启动服务器
-const PORT = process.env.WS_PORT || 3001;
-console.log(`服务器将在端口 ${PORT} 上启动`);
-server.listen(PORT, () => {
-  console.log(`WebSocket服务器已启动，运行在 ws://localhost:${PORT}`);
+console.log(`服务器将在端口 ${WS_PORT} 上启动`);
+server.listen(WS_PORT, () => {
+  console.log(`WebSocket服务器已启动，运行在 ws://localhost:${WS_PORT}`);
 
   // WebSocket服务器启动后再启动Next.js应用
   console.log("正在启动Next.js应用...");

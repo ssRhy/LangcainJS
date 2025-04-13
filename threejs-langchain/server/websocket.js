@@ -6,9 +6,26 @@ const path = require("path");
 const fs = require("fs");
 
 // 加载环境变量
-dotenv.config();
+const envPath = path.resolve(__dirname, "../.env");
+dotenv.config({ path: envPath });
 
+console.log(`使用环境变量文件: ${envPath}`);
 console.log(`WS_PORT: ${process.env.WS_PORT || 3001}`);
+console.log(
+  `AZURE_OPENAI_API_KEY: ${
+    process.env.AZURE_OPENAI_API_KEY ? "已设置" : "未设置"
+  }`
+);
+console.log(
+  `AZURE_OPENAI_ENDPOINT: ${
+    process.env.AZURE_OPENAI_ENDPOINT ? "已设置" : "未设置"
+  }`
+);
+console.log(
+  `AZURE_OPENAI_API_DEPLOYMENT_NAME: ${
+    process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME || "未设置"
+  }`
+);
 
 // 处理动态加载模块
 let addMessageToQueue;

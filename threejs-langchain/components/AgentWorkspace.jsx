@@ -171,9 +171,29 @@ export default function AgentWorkspace() {
           break;
 
         case "agent_message":
+          // 检查消息内容中是否包含代码块
+          const codeRegex = /```(?:html|javascript)?\s*([\s\S]*?)```/g;
+          let codeMatches = [];
+          let match;
+          let content = message.content;
+
+          // 提取所有代码块
+          while ((match = codeRegex.exec(message.content)) !== null) {
+            codeMatches.push(match[1]);
+          }
+
+          // 如果找到代码块，设置到代码编辑器
+          if (codeMatches.length > 0) {
+            const extractedCode = codeMatches[0].trim();
+            setCurrentCode(extractedCode);
+
+            // 从消息中移除代码块，保留说明部分
+            content = content.replace(codeRegex, "[代码已提取到代码编辑器]");
+          }
+
           addToConversation({
             role: "agent",
-            content: message.content,
+            content: content,
             type: "message",
           });
           break;
@@ -487,6 +507,18 @@ export default function AgentWorkspace() {
             code={currentCode}
             readOnly={isAgentWorking}
             onChange={setCurrentCode}
+            onExecute={(code) => {
+              if (code && threeCanvasRef.current) {
+                const requestId = Date.now().toString();
+                executeCode(code, requestId);
+              } else {
+                addToConversation({
+                  role: "system",
+                  content: "无法执行代码：代码为空或渲染器未准备好",
+                  type: "error",
+                });
+              }
+            }}
           />
         </div>
       </div>
